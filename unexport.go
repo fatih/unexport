@@ -34,6 +34,7 @@ func main() {
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 
 	flag.Parse()
+
 	log.SetPrefix("unexport:")
 
 	if err := runMain(&config{
@@ -43,7 +44,7 @@ func main() {
 		dryRun:       *flagDryRun,
 		verbose:      *flagVerbose,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "unexport: %s\n", err)
+		log.Println(err)
 		os.Exit(1)
 	}
 }
@@ -82,26 +83,24 @@ func runMain(conf *config) error {
 	if len(errors) > 0 {
 		// With a large GOPATH tree, errors are inevitable.
 		// Report them but proceed.
-		fmt.Fprintf(os.Stderr, "While scanning Go workspace:\n")
+		log.Printf("while scanning Go workspace:\n")
 		for path, err := range errors {
-			fmt.Fprintf(os.Stderr, "Package %q: %s.\n", path, err)
+			log.Printf("Package %q: %s.\n", path, err)
 		}
 	}
 
 	// Enumerate the set of potentially affected packages.
 	possiblePackages := make(map[string]bool)
 	for _, obj := range findExportedObjects(prog, path) {
-		// External test packages are never imported,
-		// so they will never appear in the graph.
 		for path := range rev.Search(obj.Pkg().Path()) {
 			possiblePackages[path] = true
 		}
 	}
 
 	if conf.verbose {
-		fmt.Println("Possible affected packages:")
+		log.Println("Possible affected packages:")
 		for pkg := range possiblePackages {
-			fmt.Println("\t", pkg)
+			log.Println("\t", pkg)
 		}
 	}
 
