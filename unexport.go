@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -16,37 +17,31 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/types"
 	"golang.org/x/tools/refactor/importgraph"
 )
 
-// Usage is a replacement usage function for the flags package.
-func Usage() {
-	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "\tunexport [flags] -identifier T [packages]\n")
-	fmt.Fprintf(os.Stderr, "Flags:\n")
-	flag.PrintDefaults()
-}
-
 func main() {
 	var (
+		flagPackage    = flag.String("package", "", "package import path to be unexported")
 		flagIdentifier = flag.String("identifier", "", "comma-separated list of identifiers names; if empty all identifiers are unexported")
 		flagDryRun     = flag.Bool("dryrun", false, "show the change, but do not apply")
 		flagVerbose    = flag.Bool("verbose", false, "show more information. Useful for debugging.")
 	)
 
-	flag.Usage = Usage
+	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
+
 	flag.Parse()
 	log.SetPrefix("unexport:")
 
-	args := flag.Args()
-
 	if err := runMain(&config{
-		importPath:  args[0],
-		identifiers: strings.Split(*flagIdentifier, ","),
-		dryRun:      *flagDryRun,
-		verbose:     *flagVerbose,
+		importPath:   *flagPackage,
+		identifiers:  strings.Split(*flagIdentifier, ","),
+		buildContext: &build.Default,
+		dryRun:       *flagDryRun,
+		verbose:      *flagVerbose,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "unexport: %s\n", err)
 		os.Exit(1)
@@ -61,6 +56,9 @@ type config struct {
 	// identifiers is used to limit the changes of unexporting to certain identifiers
 	identifiers []string
 
+	// build context
+	buildContext *build.Context
+
 	// logging/development ...
 	dryRun  bool
 	verbose bool
@@ -69,15 +67,18 @@ type config struct {
 // runMain runs the actual command. It's an helper function so we can easily
 // calls defers or return errors.
 func runMain(conf *config) error {
+	if conf.importPath == "" {
+		return errors.New("import path of the package must be given")
+	}
+
 	path := conf.importPath
 
-	ctxt := &build.Default
-	prog, err := loadProgram(ctxt, map[string]bool{path: true})
+	prog, err := loadProgram(conf.buildContext, map[string]bool{path: true})
 	if err != nil {
 		return err
 	}
 
-	_, rev, errors := importgraph.Build(ctxt)
+	_, rev, errors := importgraph.Build(conf.buildContext)
 	if len(errors) > 0 {
 		// With a large GOPATH tree, errors are inevitable.
 		// Report them but proceed.
@@ -97,13 +98,15 @@ func runMain(conf *config) error {
 		}
 	}
 
-	fmt.Println("Possible affected packages:")
-	for pkg := range possiblePackages {
-		fmt.Println("\t", pkg)
+	if conf.verbose {
+		fmt.Println("Possible affected packages:")
+		for pkg := range possiblePackages {
+			fmt.Println("\t", pkg)
+		}
 	}
 
 	// reload the program with all possible packages to fetch the packageinfo's
-	globalProg, err := loadProgram(ctxt, possiblePackages)
+	globalProg, err := loadProgram(conf.buildContext, possiblePackages)
 	if err != nil {
 		return err
 	}
@@ -111,9 +114,11 @@ func runMain(conf *config) error {
 	objsToUpdate := make(map[types.Object]bool, 0)
 	objects := findExportedObjects(globalProg, path)
 
-	fmt.Println("Exported identififers are:")
-	for _, obj := range objects {
-		fmt.Println("\t", obj)
+	if conf.verbose {
+		log.Println("Exported identififers are:")
+		for _, obj := range objects {
+			log.Println("\t", obj)
+		}
 	}
 
 	for _, info := range globalProg.Imported {
@@ -123,9 +128,11 @@ func runMain(conf *config) error {
 		}
 	}
 
-	fmt.Println("Safe to unexport identifiers are:")
-	for obj := range objsToUpdate {
-		fmt.Println("\t", obj)
+	if conf.verbose {
+		log.Println("Safe to unexport identifiers are:")
+		for obj := range objsToUpdate {
+			log.Println("\t", obj)
+		}
 	}
 
 	var nidents int
@@ -158,22 +165,21 @@ func runMain(conf *config) error {
 					first = false
 				}
 				if err := rewriteFile(globalProg.Fset, f, tokenFile.Name()); err != nil {
-					fmt.Fprintf(os.Stderr, "unexport: %s\n", err)
+					log.Println(err)
 					nerrs++
 				}
 			}
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Unexported %d occurrence%s in %d file%s in %d package%s.\n",
-		nidents, plural(nidents),
+	log.Printf("Unexported %d occurrence%s in %d file%s in %d package%s.\n", nidents, plural(nidents),
 		len(filesToUpdate), plural(len(filesToUpdate)),
 		npkgs, plural(npkgs))
 	if nerrs > 0 {
 		return fmt.Errorf("failed to rewrite %d file%s", nerrs, plural(nerrs))
 	}
-	return nil
 
+	return nil
 }
 
 func plural(n int) string {
@@ -184,7 +190,6 @@ func plural(n int) string {
 }
 
 func rewriteFile(fset *token.FileSet, f *ast.File, filename string) error {
-	fmt.Printf("filename = %+v\n", filename)
 	var buf bytes.Buffer
 	if err := format.Node(&buf, fset, f); err != nil {
 		return fmt.Errorf("failed to pretty-print syntax tree: %v", err)
