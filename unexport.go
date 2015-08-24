@@ -72,7 +72,9 @@ type config struct {
 }
 
 // runMain runs the actual command. It's an helper function so we can easily
-// calls defers or return errors.
+// calls defers or return errors.  most of the functionality can be seen in
+// `gorename` code source. Actually unexport is something that probably
+// gorename can do for us.
 func runMain(conf *config) error {
 	if conf.importPath == "" {
 		return errors.New("import path of the package must be given")
