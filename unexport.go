@@ -16,6 +16,8 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/loader"
@@ -140,14 +142,14 @@ func runMain(conf *config) error {
 		for id, obj := range info.Defs {
 			if objsToUpdate[obj] {
 				nidents++
-				id.Name = strings.ToLower(obj.Name())
+				id.Name = toLowerCase(obj.Name())
 				filesToUpdate[globalProg.Fset.File(id.Pos())] = true
 			}
 		}
 		for id, obj := range info.Uses {
 			if objsToUpdate[obj] {
 				nidents++
-				id.Name = strings.ToLower(obj.Name())
+				id.Name = toLowerCase(obj.Name())
 				filesToUpdate[globalProg.Fset.File(id.Pos())] = true
 			}
 		}
@@ -163,6 +165,11 @@ func runMain(conf *config) error {
 					npkgs++
 					first = false
 				}
+
+				if conf.dryRun {
+					continue
+				}
+
 				if err := rewriteFile(globalProg.Fset, f, tokenFile.Name()); err != nil {
 					log.Println(err)
 					nerrs++
@@ -171,14 +178,35 @@ func runMain(conf *config) error {
 		}
 	}
 
-	log.Printf("Unexported %d occurrence%s in %d file%s in %d package%s.\n", nidents, plural(nidents),
+	log.Printf("Unexported %d identifier%s in %d file%s in %d package%s.\n", nidents, plural(nidents),
 		len(filesToUpdate), plural(len(filesToUpdate)),
 		npkgs, plural(npkgs))
+	if conf.verbose {
+		log.Println("Identifiers changed:")
+		for obj := range objsToUpdate {
+			log.Println("\t", obj)
+		}
+		log.Println("Files changed:")
+		for f := range filesToUpdate {
+			log.Println("\t", f.Name())
+		}
+
+	}
+
 	if nerrs > 0 {
 		return fmt.Errorf("failed to rewrite %d file%s", nerrs, plural(nerrs))
 	}
 
 	return nil
+}
+
+func toLowerCase(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToLower(r)) + s[n:]
 }
 
 func plural(n int) string {
