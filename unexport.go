@@ -78,7 +78,8 @@ type config struct {
 //
 // TODO(arslan): add tests
 // TODO(arslan): add vim-go integration ;)
-// TODO(arslan): do not unexport identifiers from test files, such as TestXxx
+// TODO(arslan): check how this is acting for internal/ folders
+// TODO(arslan): check how this is acting for vendor/ folders
 func runMain(conf *config) error {
 	if conf.importPath == "" {
 		return errors.New("import path of the package must be given")
@@ -132,17 +133,25 @@ func runMain(conf *config) error {
 		}
 	}
 
-	// filter out identifiers which can't be renamed due any collision or if
-	// they are part of any other third party package (because renaming would
-	// cause to break other packages)
+	// filter safeObjects check which exported identifiers are used by other packages
+	var safeObjects map[*ast.Ident]types.Object
 	for _, info := range globalProg.Imported {
-		safeObjects := filterObjects(info, objects, conf.identifiers)
-		for _, obj := range safeObjects {
-			// we don't care about other packages anymore
-			if info.Pkg.Path() != path {
-				continue
-			}
+		// we only check for packages other than ours
+		if info.Pkg.Path() == path {
+			continue
+		}
 
+		safeObjects = filterObjects(info, objects, conf.identifiers)
+	}
+
+	// filter out identifiers which can't be renamed due any collision in our package
+	for _, info := range globalProg.Imported {
+		// we don't care about other packages anymore
+		if info.Pkg.Path() != path {
+			continue
+		}
+
+		for _, obj := range safeObjects {
 			// don't include collisions
 			newName := toLowerCase(obj.Name())
 			if info.Pkg.Path() == obj.Pkg().Path() && hasObject(info, newName) {
@@ -209,6 +218,7 @@ func runMain(conf *config) error {
 	log.Printf("Unexported %d identifier%s in %d file%s in %d package%s.\n", nidents, plural(nidents),
 		len(filesToUpdate), plural(len(filesToUpdate)),
 		npkgs, plural(npkgs))
+
 	if conf.verbose {
 		log.Println("Identifiers changed:")
 		for obj := range objsToUpdate {
@@ -270,7 +280,6 @@ func filterObjects(info *loader.PackageInfo, exported map[*ast.Ident]types.Objec
 
 	filtered := make(map[*ast.Ident]types.Object, 0)
 	for id, ex := range exported {
-		// TODO(arslan): not sure if we should allow test functions?
 		if !hasUse(info, ex) && isAllowed(ex.Name()) {
 			filtered[id] = ex
 		}
@@ -343,7 +352,7 @@ func loadProgram(ctxt *build.Context, pkgs map[string]bool) (*loader.Program, er
 	}
 
 	for pkg := range pkgs {
-		conf.ImportWithTests(pkg)
+		conf.Import(pkg)
 	}
 	return conf.Load()
 }
