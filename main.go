@@ -12,6 +12,10 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/types"
+	"golang.org/x/tools/refactor/importgraph"
 )
 
 // Usage is a replacement usage function for the flags package.
@@ -35,12 +39,88 @@ func main() {
 	fmt.Printf("identifiers = %+v\n", identifiers)
 
 	args := flag.Args()
-	pkg, err := build.Import(args[0], "", build.ImportComment)
-	if err != nil {
-		log.Fatalf("%s", err)
-	}
-	parsePackage(pkg)
 
+	if err := loadProgram(args[0]); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	// pkg, err := build.Import(args[0], "", build.ImportComment)
+	// if err != nil {
+	// 	log.Fatalf("%s", err)
+	// }
+	// parsePackage(pkg)
+
+}
+
+func loadProgram(path string) error {
+	ctxt := &build.Default
+	conf := loader.Config{
+		Build:       ctxt,
+		ParserMode:  parser.ParseComments,
+		AllowErrors: false,
+		ImportPkgs:  map[string]bool{path: true},
+	}
+
+	prog, err := conf.Load()
+	if err != nil {
+		return err
+	}
+
+	var info *loader.PackageInfo
+	for name, p := range prog.Imported {
+		if name == path {
+			fmt.Println("found: ", info)
+			info = p
+			break
+		}
+	}
+
+	if info == nil {
+		return fmt.Errorf("import path %s couldn't be find", path)
+	}
+
+	_, rev, errors := importgraph.Build(ctxt)
+	if len(errors) > 0 {
+		// With a large GOPATH tree, errors are inevitable.
+		// Report them but proceed.
+		fmt.Fprintf(os.Stderr, "While scanning Go workspace:\n")
+		for path, err := range errors {
+			fmt.Fprintf(os.Stderr, "Package %q: %s.\n", path, err)
+		}
+	}
+
+	// Enumerate the set of potentially affected packages.
+	affectedPackages := make(map[string]bool)
+	for _, obj := range exportedObjects(info) {
+		// External test packages are never imported,
+		// so they will never appear in the graph.
+		for path := range rev.Search(obj.Pkg().Path()) {
+			affectedPackages[path] = true
+		}
+	}
+
+	for pkg := range affectedPackages {
+		fmt.Println(pkg)
+	}
+
+	return nil
+}
+
+// exportedObjects returns objects which are exported only
+func exportedObjects(info *loader.PackageInfo) []types.Object {
+	var objects []types.Object
+	for _, obj := range info.Defs {
+		if obj == nil {
+			continue
+		}
+
+		if obj.Exported() {
+			objects = append(objects, obj)
+		}
+	}
+
+	return objects
 }
 
 func parsePackage(pkg *build.Package) {
