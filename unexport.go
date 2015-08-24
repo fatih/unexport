@@ -44,13 +44,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	// pkg, err := build.Import(args[0], "", build.ImportComment)
-	// if err != nil {
-	// 	log.Fatalf("%s", err)
-	// }
-	// parsePackage(pkg)
-
 }
 
 // runMain runs the actual command. It's an helper function so we can easily
@@ -60,18 +53,6 @@ func runMain(path string) error {
 	prog, err := loadProgram(ctxt, map[string]bool{path: true})
 	if err != nil {
 		return err
-	}
-
-	var info *loader.PackageInfo
-	for name, p := range prog.Imported {
-		if name == path {
-			info = p
-			break
-		}
-	}
-
-	if info == nil {
-		return fmt.Errorf("import path %s couldn't be find", path)
 	}
 
 	_, rev, errors := importgraph.Build(ctxt)
@@ -85,36 +66,117 @@ func runMain(path string) error {
 	}
 
 	// Enumerate the set of potentially affected packages.
-	affectedPackages := make(map[string]bool)
-	for _, obj := range exportedObjects(info) {
+	possiblePackages := make(map[string]bool)
+	for _, obj := range findExportedObjects(prog, path) {
 		// External test packages are never imported,
 		// so they will never appear in the graph.
 		for path := range rev.Search(obj.Pkg().Path()) {
-			affectedPackages[path] = true
+			possiblePackages[path] = true
 		}
 	}
 
-	for pkg := range affectedPackages {
+	fmt.Println("Possible affected packages:")
+	for pkg := range possiblePackages {
 		fmt.Println("\t", pkg)
+	}
+
+	// reload the program with all possible packages to fetch the packageinfo's
+	globalProg, err := loadProgram(ctxt, possiblePackages)
+	if err != nil {
+		return err
+	}
+
+	objsToUpdate := make(map[types.Object]bool, 0)
+	objects := findExportedObjects(globalProg, path)
+
+	fmt.Println("Exported identififers are:")
+	for _, obj := range objects {
+		fmt.Println("\t", obj)
+	}
+
+	for _, info := range globalProg.Imported {
+		safeObjects := filterObjects(info, objects)
+		for _, obj := range safeObjects {
+			objsToUpdate[obj] = true
+		}
+	}
+
+	fmt.Println("Safe to unexport identifiers are:")
+	for obj := range objsToUpdate {
+		fmt.Println("\t", obj)
+	}
+
+	var nidents int
+	var filesToUpdate = make(map[*token.File]bool)
+	for _, info := range globalProg.Imported {
+		for id, obj := range info.Defs {
+			if objsToUpdate[obj] {
+				nidents++
+				id.Name = strings.ToLower(obj.Name())
+				filesToUpdate[globalProg.Fset.File(id.Pos())] = true
+			}
+		}
+		for id, obj := range info.Uses {
+			if objsToUpdate[obj] {
+				nidents++
+				id.Name = strings.ToLower(obj.Name())
+				filesToUpdate[globalProg.Fset.File(id.Pos())] = true
+			}
+		}
 	}
 
 	return nil
 }
 
+// filterObjects filters the given objects and returns objects which are not in use by the given info package
+func filterObjects(info *loader.PackageInfo, exported map[*ast.Ident]types.Object) map[*ast.Ident]types.Object {
+	filtered := make(map[*ast.Ident]types.Object, 0)
+	for id, ex := range exported {
+		if !hasUse(info, ex) {
+			filtered[id] = ex
+		}
+	}
+
+	return filtered
+}
+
+// hasUse returns true if the given obj is part of the use in info
+func hasUse(info *loader.PackageInfo, obj types.Object) bool {
+	for _, o := range info.Uses {
+		if o == obj {
+			return true
+		}
+	}
+	return false
+}
+
 // exportedObjects returns objects which are exported only
-func exportedObjects(info *loader.PackageInfo) []types.Object {
-	var objects []types.Object
-	for _, obj := range info.Defs {
+func exportedObjects(info *loader.PackageInfo) map[*ast.Ident]types.Object {
+	objects := make(map[*ast.Ident]types.Object, 0)
+	for id, obj := range info.Defs {
 		if obj == nil {
 			continue
 		}
 
 		if obj.Exported() {
-			objects = append(objects, obj)
+			objects[id] = obj
 		}
 	}
 
 	return objects
+}
+
+func findExportedObjects(prog *loader.Program, path string) map[*ast.Ident]types.Object {
+	var pkgObj *types.Package
+	for pkg := range prog.AllPackages {
+		if pkg.Path() == path {
+			pkgObj = pkg
+			break
+		}
+	}
+
+	info := prog.AllPackages[pkgObj]
+	return exportedObjects(info)
 }
 
 func loadProgram(ctxt *build.Context, pkgs map[string]bool) (*loader.Program, error) {
@@ -128,84 +190,4 @@ func loadProgram(ctxt *build.Context, pkgs map[string]bool) (*loader.Program, er
 		conf.ImportWithTests(pkg)
 	}
 	return conf.Load()
-}
-
-func parsePackage(pkg *build.Package) {
-	fs := token.NewFileSet()
-
-	include := func(info os.FileInfo) bool {
-		for _, name := range pkg.GoFiles {
-			if name == info.Name() {
-				return true
-			}
-		}
-		for _, name := range pkg.CgoFiles {
-			if name == info.Name() {
-				return true
-			}
-		}
-		return false
-	}
-
-	pkgs, err := parser.ParseDir(fs, pkg.Dir, include, parser.ParseComments)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Make sure they are all in one package.
-	if len(pkgs) != 1 {
-		log.Fatalf("multiple packages in directory %s", pkg.Dir)
-	}
-
-	astPkg := pkgs[pkg.Name]
-
-	for _, f := range astPkg.Files {
-		ast.FileExports(f)
-		for _, decl := range f.Decls {
-			switch d := decl.(type) {
-			case *ast.GenDecl:
-				switch d.Tok {
-				case token.IMPORT:
-				case token.CONST:
-					for _, spec := range d.Specs {
-						if v, ok := spec.(*ast.ValueSpec); ok {
-							fmt.Println("Const:", v.Names)
-						}
-					}
-				case token.VAR:
-					for _, spec := range d.Specs {
-						if v, ok := spec.(*ast.ValueSpec); ok {
-							fmt.Println("Var:", v.Names)
-						}
-					}
-				case token.TYPE:
-					for _, spec := range d.Specs {
-						if s, ok := spec.(*ast.TypeSpec); ok {
-							fmt.Println("Type:", s.Name.Name)
-							switch t := s.Type.(type) {
-							case *ast.StructType:
-								for _, l := range t.Fields.List {
-									fmt.Printf("\tField: %+v\n", l.Names)
-								}
-							}
-						}
-					}
-				}
-			case *ast.FuncDecl:
-				// methods might bound to unexported types, show only if those
-				// types are exported too
-				if d.Recv != nil {
-					for _, l := range d.Recv.List {
-						for _, n := range l.Names {
-							if ast.IsExported(n.Name) {
-								fmt.Printf("Func: %s\n", d.Name.Name)
-							}
-						}
-					}
-				} else {
-					fmt.Printf("Func: %s\n", d.Name.Name)
-				}
-			}
-		}
-	}
 }
