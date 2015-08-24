@@ -47,16 +47,16 @@ Flags:
 
 Examples:
 
-  % unexport -package encoding/pem
+  $ unexport -package encoding/pem
   
   	Unexport exported identifiers in the encoding/pem package
   
-  % unexport -package github.com/fatih/color -dryrun
+  $ unexport -package github.com/fatih/color -dryrun
   
   	Process the package and display any possible changes. It doesn't unexport
   	exported identifiers because of the -dryrun flag
   
-  % unexport -package github.com/fatih/color -identifier "Color,Attribute"
+  $ unexport -package github.com/fatih/color -identifier "Color,Attribute"
   
   	Unexport only the "Color" and "Attribute" identifiers from the
   	github.com/fatih/color package. Note that if the identifiers are used by
