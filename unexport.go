@@ -86,7 +86,7 @@ func main() {
 	flag.Parse()
 	log.SetPrefix("unexport: ")
 
-	if len(flag.Args()) == 0 {
+	if flag.NFlag() == 0 {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -268,20 +268,20 @@ func runMain(conf *config) error {
 		}
 	}
 
+	if nidents == 0 {
+		return nil
+	}
+
 	log.Printf("Unexported %d identifier%s in %d file%s in %d package%s.\n", nidents, plural(nidents),
 		len(filesToUpdate), plural(len(filesToUpdate)),
 		npkgs, plural(npkgs))
-
-	if conf.verbose {
-		log.Println("Identifiers changed:")
-		for obj := range objsToUpdate {
-			log.Println("\t", obj)
-		}
-		log.Println("Files changed:")
-		for f := range filesToUpdate {
-			log.Println("\t", f.Name())
-		}
-
+	log.Println("Identifiers changed:")
+	for obj := range objsToUpdate {
+		log.Println("\t", obj)
+	}
+	log.Println("Files changed:")
+	for f := range filesToUpdate {
+		log.Println("\t", f.Name())
 	}
 
 	if nerrs > 0 {
