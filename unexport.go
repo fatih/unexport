@@ -36,7 +36,6 @@ func main() {
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 
 	flag.Parse()
-
 	log.SetPrefix("unexport:")
 
 	identifiers := []string{}
@@ -127,9 +126,25 @@ func runMain(conf *config) error {
 		}
 	}
 
+	// filter out identifiers which can't be renamed due any collision or if
+	// they are part of any other third party package (because renaming would
+	// cause to break other packages)
 	for _, info := range globalProg.Imported {
 		safeObjects := filterObjects(info, objects, conf.identifiers)
 		for _, obj := range safeObjects {
+			// we don't care about other packages anymore
+			if info.Pkg.Path() != path {
+				continue
+			}
+
+			// don't include collisions
+			newName := toLowerCase(obj.Name())
+			if info.Pkg.Path() == obj.Pkg().Path() && hasObject(info, newName) {
+				log.Printf("WARNING! can't unexport %q due collision. Identifier %q already exists.\n",
+					obj.Name(), newName)
+				continue
+			}
+
 			objsToUpdate[obj] = true
 		}
 	}
@@ -141,6 +156,7 @@ func runMain(conf *config) error {
 		}
 	}
 
+	// first create the files that needs an update and modify the fileset
 	var nidents int
 	var filesToUpdate = make(map[*token.File]bool)
 	for _, info := range globalProg.Imported {
@@ -160,6 +176,7 @@ func runMain(conf *config) error {
 		}
 	}
 
+	// now start to rewrite the files
 	var nerrs, npkgs int
 	for _, info := range globalProg.Imported {
 		first := true
@@ -266,6 +283,21 @@ func hasUse(info *loader.PackageInfo, obj types.Object) bool {
 	return false
 }
 
+// hasObjects returns true if the given name exists in the definition of the package info
+func hasObject(info *loader.PackageInfo, name string) bool {
+	for _, obj := range info.Defs {
+		if obj == nil {
+			continue
+		}
+
+		if obj.Name() == name {
+			return true
+		}
+	}
+
+	return false
+}
+
 // exportedObjects returns objects which are exported only
 func exportedObjects(info *loader.PackageInfo) map[*ast.Ident]types.Object {
 	objects := make(map[*ast.Ident]types.Object, 0)
@@ -282,6 +314,8 @@ func exportedObjects(info *loader.PackageInfo) map[*ast.Ident]types.Object {
 	return objects
 }
 
+// findExportedObjects returns a map of exported paths which are part of the
+// given import path
 func findExportedObjects(prog *loader.Program, path string) map[*ast.Ident]types.Object {
 	var pkgObj *types.Package
 	for pkg := range prog.AllPackages {
