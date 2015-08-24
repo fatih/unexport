@@ -39,9 +39,14 @@ func main() {
 
 	log.SetPrefix("unexport:")
 
+	identifiers := []string{}
+	if *flagIdentifier != "" {
+		identifiers = strings.Split(*flagIdentifier, ",")
+	}
+
 	if err := runMain(&config{
 		importPath:   *flagPackage,
-		identifiers:  strings.Split(*flagIdentifier, ","),
+		identifiers:  identifiers,
 		buildContext: &build.Default,
 		dryRun:       *flagDryRun,
 		verbose:      *flagVerbose,
@@ -123,7 +128,7 @@ func runMain(conf *config) error {
 	}
 
 	for _, info := range globalProg.Imported {
-		safeObjects := filterObjects(info, objects)
+		safeObjects := filterObjects(info, objects, conf.identifiers)
 		for _, obj := range safeObjects {
 			objsToUpdate[obj] = true
 		}
@@ -209,6 +214,7 @@ func toLowerCase(s string) string {
 	return string(unicode.ToLower(r)) + s[n:]
 }
 
+// plural, copied from golang.org/x/tools/refactor/rename
 func plural(n int) string {
 	if n != 1 {
 		return "s"
@@ -224,11 +230,25 @@ func rewriteFile(fset *token.FileSet, f *ast.File, filename string) error {
 	return ioutil.WriteFile(filename, buf.Bytes(), 0644)
 }
 
-// filterObjects filters the given objects and returns objects which are not in use by the given info package
-func filterObjects(info *loader.PackageInfo, exported map[*ast.Ident]types.Object) map[*ast.Ident]types.Object {
+// filterObjects filters the given objects and returns objects which are not in use by the given info package.
+func filterObjects(info *loader.PackageInfo, exported map[*ast.Ident]types.Object, allowed []string) map[*ast.Ident]types.Object {
+	isAllowed := func(id string) bool {
+		for _, i := range allowed {
+			if i == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(allowed) == 0 {
+		isAllowed = func(id string) bool { return true }
+	}
+
 	filtered := make(map[*ast.Ident]types.Object, 0)
 	for id, ex := range exported {
-		if !hasUse(info, ex) {
+		// TODO(arslan): not sure if we should allow test functions?
+		if !hasUse(info, ex) && isAllowed(ex.Name()) {
 			filtered[id] = ex
 		}
 	}
