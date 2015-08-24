@@ -25,18 +25,71 @@ import (
 	"golang.org/x/tools/refactor/importgraph"
 )
 
+const usage = `unexport: change nonused exported identifiers to unexported identifiers
+
+Usage:
+
+  unexport -package <import-path>
+
+Flags:
+
+  -package     specifies the import path of the package 
+  
+  -identifier  explicit comma seperated list of identifiers. If empty (default)
+               all possible exported identifiers are selected.
+  
+  -tags        a list of build tags to consider satisifed during the build.
+  
+  -dryrun      causes the tool to report conflicts but not update any files.
+  
+  -v           enables verbose logging.
+
+
+Examples:
+
+  % unexport -package encoding/pem
+  
+  	Unexport exported identifiers in the encoding/pem package
+  
+  % unexport -package github.com/fatih/color -dryrun
+  
+  	Process the package and display any possible changes. It doesn't unexport
+  	exported identifiers because of the -dryrun flag
+  
+  % unexport -package github.com/fatih/color -identifier "Color,Attribute"
+  
+  	Unexport only the "Color" and "Attribute" identifiers from the
+  	github.com/fatih/color package. Note that if the identifiers are used by
+  	other packages, it'll silently fail
+
+Notes:
+
+  unexport doesn't unexport identifiers which are dependent on other packages. It
+  rejects identifiers in test files. If the the unexported identifier yields a
+  collision, (example "Foo" -> "foo"), a warning is being displayed.
+
+`
+
 func main() {
 	var (
 		flagPackage    = flag.String("package", "", "package import path to be unexported")
 		flagIdentifier = flag.String("identifier", "", "comma-separated list of identifiers names; if empty all identifiers are unexported")
 		flagDryRun     = flag.Bool("dryrun", false, "show the change, but do not apply")
-		flagVerbose    = flag.Bool("verbose", false, "show more information. Useful for debugging.")
+		flagVerbose    = flag.Bool("v", false, "enable verbose mode. Useful for debugging.")
 	)
 
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, usage)
+	}
 
 	flag.Parse()
 	log.SetPrefix("unexport: ")
+
+	if len(flag.Args()) == 0 {
+		flag.Usage()
+		os.Exit(1)
+	}
 
 	identifiers := []string{}
 	if *flagIdentifier != "" {
