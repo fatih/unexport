@@ -40,7 +40,7 @@ func main() {
 
 	args := flag.Args()
 
-	if err := loadProgram(args[0]); err != nil {
+	if err := runMain(args[0]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -53,16 +53,11 @@ func main() {
 
 }
 
-func loadProgram(path string) error {
+// runMain runs the actual command. It's an helper function so we can easily
+// calls defers or return errors.
+func runMain(path string) error {
 	ctxt := &build.Default
-	conf := loader.Config{
-		Build:       ctxt,
-		ParserMode:  parser.ParseComments,
-		AllowErrors: false,
-		ImportPkgs:  map[string]bool{path: true},
-	}
-
-	prog, err := conf.Load()
+	prog, err := loadProgram(ctxt, map[string]bool{path: true})
 	if err != nil {
 		return err
 	}
@@ -70,7 +65,6 @@ func loadProgram(path string) error {
 	var info *loader.PackageInfo
 	for name, p := range prog.Imported {
 		if name == path {
-			fmt.Println("found: ", info)
 			info = p
 			break
 		}
@@ -101,7 +95,7 @@ func loadProgram(path string) error {
 	}
 
 	for pkg := range affectedPackages {
-		fmt.Println(pkg)
+		fmt.Println("\t", pkg)
 	}
 
 	return nil
@@ -121,6 +115,19 @@ func exportedObjects(info *loader.PackageInfo) []types.Object {
 	}
 
 	return objects
+}
+
+func loadProgram(ctxt *build.Context, pkgs map[string]bool) (*loader.Program, error) {
+	conf := loader.Config{
+		Build:       ctxt,
+		ParserMode:  parser.ParseComments,
+		AllowErrors: false,
+	}
+
+	for pkg := range pkgs {
+		conf.ImportWithTests(pkg)
+	}
+	return conf.Load()
 }
 
 func parsePackage(pkg *build.Package) {
