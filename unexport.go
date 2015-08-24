@@ -32,27 +32,45 @@ func Usage() {
 func main() {
 	var (
 		flagIdentifier = flag.String("identifier", "", "comma-separated list of identifiers names; if empty all identifiers are unexported")
-		// flagDryRun     = flag.Bool("dryrun", false, "show the change, but do not apply")
+		flagDryRun     = flag.Bool("dryrun", false, "show the change, but do not apply")
+		flagVerbose    = flag.Bool("verbose", false, "show more information. Useful for debugging.")
 	)
 
-	log.SetPrefix("unexport: ")
 	flag.Usage = Usage
 	flag.Parse()
-
-	identifiers := strings.Split(*flagIdentifier, ",")
-	fmt.Printf("identifiers = %+v\n", identifiers)
+	log.SetPrefix("unexport:")
 
 	args := flag.Args()
 
-	if err := runMain(args[0]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if err := runMain(&config{
+		importPath:  args[0],
+		identifiers: strings.Split(*flagIdentifier, ","),
+		dryRun:      *flagDryRun,
+		verbose:     *flagVerbose,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "unexport: %s\n", err)
 		os.Exit(1)
 	}
 }
 
+// config is used to define how unexport should be work
+type config struct {
+	// importPath defines the package defined with the importpath
+	importPath string
+
+	// identifiers is used to limit the changes of unexporting to certain identifiers
+	identifiers []string
+
+	// logging/development ...
+	dryRun  bool
+	verbose bool
+}
+
 // runMain runs the actual command. It's an helper function so we can easily
 // calls defers or return errors.
-func runMain(path string) error {
+func runMain(conf *config) error {
+	path := conf.importPath
+
 	ctxt := &build.Default
 	prog, err := loadProgram(ctxt, map[string]bool{path: true})
 	if err != nil {
