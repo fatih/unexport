@@ -3,12 +3,15 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/format"
 	"go/parser"
 	"go/token"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -29,6 +32,7 @@ func Usage() {
 func main() {
 	var (
 		flagIdentifier = flag.String("identifier", "", "comma-separated list of identifiers names; if empty all identifiers are unexported")
+		// flagDryRun     = flag.Bool("dryrun", false, "show the change, but do not apply")
 	)
 
 	log.SetPrefix("unexport: ")
@@ -125,7 +129,49 @@ func runMain(path string) error {
 		}
 	}
 
+	var nerrs, npkgs int
+	for _, info := range globalProg.Imported {
+		first := true
+		for _, f := range info.Files {
+			tokenFile := globalProg.Fset.File(f.Pos())
+			if filesToUpdate[tokenFile] {
+				if first {
+					npkgs++
+					first = false
+				}
+				if err := rewriteFile(globalProg.Fset, f, tokenFile.Name()); err != nil {
+					fmt.Fprintf(os.Stderr, "unexport: %s\n", err)
+					nerrs++
+				}
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "Unexported %d occurrence%s in %d file%s in %d package%s.\n",
+		nidents, plural(nidents),
+		len(filesToUpdate), plural(len(filesToUpdate)),
+		npkgs, plural(npkgs))
+	if nerrs > 0 {
+		return fmt.Errorf("failed to rewrite %d file%s", nerrs, plural(nerrs))
+	}
 	return nil
+
+}
+
+func plural(n int) string {
+	if n != 1 {
+		return "s"
+	}
+	return ""
+}
+
+func rewriteFile(fset *token.FileSet, f *ast.File, filename string) error {
+	fmt.Printf("filename = %+v\n", filename)
+	var buf bytes.Buffer
+	if err := format.Node(&buf, fset, f); err != nil {
+		return fmt.Errorf("failed to pretty-print syntax tree: %v", err)
+	}
+	return ioutil.WriteFile(filename, buf.Bytes(), 0644)
 }
 
 // filterObjects filters the given objects and returns objects which are not in use by the given info package
