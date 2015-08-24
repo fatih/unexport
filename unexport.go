@@ -36,7 +36,7 @@ func main() {
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 
 	flag.Parse()
-	log.SetPrefix("unexport:")
+	log.SetPrefix("unexport: ")
 
 	identifiers := []string{}
 	if *flagIdentifier != "" {
@@ -75,6 +75,10 @@ type config struct {
 // calls defers or return errors.  most of the functionality can be seen in
 // `gorename` code source. Actually unexport is something that probably
 // gorename can do for us.
+//
+// TODO(arslan): add tests
+// TODO(arslan): add vim-go integration ;)
+// TODO(arslan): do not unexport identifiers from test files, such as TestXxx
 func runMain(conf *config) error {
 	if conf.importPath == "" {
 		return errors.New("import path of the package must be given")
